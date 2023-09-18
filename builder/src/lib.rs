@@ -2,10 +2,11 @@ use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, Data, DeriveInput, Fields, GenericArgument, Ident, PathArguments, Type,
+    parse_macro_input, parse_quote, Attribute, Data, DeriveInput, Fields, GenericArgument, Ident,
+    Meta, PathArguments, Type,
 };
 
-#[proc_macro_derive(Builder)]
+#[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive_builder(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     // Prase the input tokens into a syntax tree
     let input = parse_macro_input!(input as DeriveInput);
@@ -59,12 +60,27 @@ fn optional_type(ty: &Type) -> Option<Type> {
     out_ty
 }
 
+fn attr_builder_value(attrs: &Vec<Attribute>) {
+    for attr in attrs {
+        if attr.path().is_ident("builder") {
+            if let Meta::List(meta) = &attr.meta {
+                println!("{}", &meta.tokens);
+                let tokens = meta.tokens.clone().into_iter().collect();
+                if tokens[0] == "each" {
+                    return tokes[2];
+                }
+            }
+        }
+    }
+}
+
 fn get_build_return(data: &Data, name: &Ident) -> TokenStream {
     match *data {
         Data::Struct(ref data) => match data.fields {
             Fields::Named(ref fields) => {
                 let recurse_if = fields.named.iter().map(|f| {
                     let name = &f.ident;
+                    attr_builder_value(&f.attrs);
                     if let Some(_ty) = optional_type(&f.ty) {
                         quote_spanned! { f.span()=>
                             let #name = self.#name.clone();
