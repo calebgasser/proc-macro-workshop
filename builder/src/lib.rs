@@ -1,10 +1,28 @@
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, quote_spanned};
+use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, parse_quote, Attribute, Data, DeriveInput, Fields, GenericArgument, Ident,
-    Meta, PathArguments, Type,
+    parse::{Parse, ParseStream},
+    parse_macro_input, Attribute, Data, DeriveInput, Fields, GenericArgument, Ident, LitStr,
+    PathArguments, Token, Type,
 };
+
+struct BuilderParser {
+    ident: Ident,
+    value: Ident,
+}
+
+impl Parse for BuilderParser {
+    #[inline]
+    fn parse(input: ParseStream) -> Result<Self, syn::Error> {
+        let ident = input.parse::<Ident>()?;
+        input.parse::<Token!(=)>()?;
+        let value = input.parse::<LitStr>()?.value();
+        let value = format_ident!("{}", value);
+
+        Ok(BuilderParser { ident, value })
+    }
+}
 
 #[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive_builder(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -60,18 +78,16 @@ fn optional_type(ty: &Type) -> Option<Type> {
     out_ty
 }
 
-fn attr_builder_value(attrs: &Vec<Attribute>) {
+fn attr_builder_value(attrs: &Vec<Attribute>) -> Option<BuilderParser> {
     for attr in attrs {
         if attr.path().is_ident("builder") {
-            if let Meta::List(meta) = &attr.meta {
-                println!("{}", &meta.tokens);
-                let tokens = meta.tokens.clone().into_iter().collect();
-                if tokens[0] == "each" {
-                    return tokes[2];
-                }
-            }
+            let builder: BuilderParser = attr
+                .parse_args()
+                .expect("failed to parse buidler attribute");
+            return Some(builder);
         }
     }
+    None
 }
 
 fn get_build_return(data: &Data, name: &Ident) -> TokenStream {
@@ -119,18 +135,63 @@ fn get_impl_funcs(data: &Data) -> TokenStream {
                 let recurse = fields.named.iter().map(|f| {
                     let name = &f.ident;
                     let ty = &f.ty;
-                    if let Some(ty) = optional_type(&f.ty) {
-                        quote_spanned! { f.span()=>
-                            fn #name(&mut self, #name: #ty) -> &mut Self {
-                                self.#name = Some(#name);
-                                self
+                    if let Some(builder) = attr_builder_value(&f.attrs) {
+                        let val_name = builder.value;
+                        if builder.ident == "each" {
+                            if let Some(ty) = optional_type(&f.ty) {
+                                quote_spanned! { f.span()=>
+                                    fn #val_name(&mut self, #val_name: #ty) -> &mut Self {
+                                        if let Some(#name) = self.#name {
+                                            self.#name.push(#val_name);
+                                        } else {
+                                            self.#name = vec![#val_name];
+                                        }
+                                        self
+                                    }
+                                }
+                            } else {
+                                quote_spanned! { f.span()=>
+                                    fn #val_name(&mut self, #val_name: #ty) -> &mut Self {
+                                        if let Some(#name) = self.#name {
+                                            self.#name.push(#val_name);
+                                        } else {
+                                            self.#name = vec![#val_name];
+                                        }
+                                        self
+                                    }
+                                }
+                            }
+                        } else {
+                            if let Some(ty) = optional_type(&f.ty) {
+                                quote_spanned! { f.span()=>
+                                    fn #name(&mut self, #name: #ty) -> &mut Self {
+                                        self.#name = Some(#name);
+                                        self
+                                    }
+                                }
+                            } else {
+                                quote_spanned! { f.span()=>
+                                    fn #name(&mut self, #name: #ty) -> &mut Self {
+                                        self.#name = Some(#name);
+                                        self
+                                    }
+                                }
                             }
                         }
                     } else {
-                        quote_spanned! { f.span()=>
-                            fn #name(&mut self, #name: #ty) -> &mut Self {
-                                self.#name = Some(#name);
-                                self
+                        if let Some(ty) = optional_type(&f.ty) {
+                            quote_spanned! { f.span()=>
+                                fn #name(&mut self, #name: #ty) -> &mut Self {
+                                    self.#name = Some(#name);
+                                    self
+                                }
+                            }
+                        } else {
+                            quote_spanned! { f.span()=>
+                                fn #name(&mut self, #name: #ty) -> &mut Self {
+                                    self.#name = Some(#name);
+                                    self
+                                }
                             }
                         }
                     }
